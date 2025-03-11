@@ -1,76 +1,87 @@
 import pandas as pd
-from sklearn.model_selection import train_test_split
 import numpy as np
-from matplotlib import pyplot
-from sklearn.neural_network import MLPRegressor
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.svm import SVR
-from sklearn.metrics import mean_squared_error
-from sklearn.metrics import mean_absolute_error
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import cross_val_predict, KFold
+from sklearn.metrics import mean_squared_error, r2_score
+from deap import base, creator, tools, algorithms
+import random
 
-# Data import and model definition
-data = pd.read_excel('data_domain.xlsx')
-model=RandomForestRegressor()
-'''
-model=SVR()
-model=MLPRegressor()
-'''
-y=data['G']
-X=data.drop('G',axis=1)
-X,X_val,y,y_val=train_test_split(X,y,test_size=0.1)
-X_train,X_test,y_train,y_test=train_test_split(X,y,test_size=0.2)
-model.fit(X_train,y_train)
+# Load data
+data = pd.read_excel("validation.xlsx")
+X = data[['Direction', 'Range', 'Nugget', 'Sill']]
+y_rmse = data['RMSE']
+y_r = data['R']
 
-# Model validation
-r_train,r_test,r_val=model.score(X_train,y_train),model.score(X_test,y_test),model.score(X_val,y_val)
-pred_true=list(model.predict(X_train))
-pred_test=list(model.predict(X_test))
-pred_val=list(model.predict(X_val))
-e_train,e_test,e_val=y_train-pred_true,y_test-pred_test,y_val-pred_val
-m_etrain,std_etrain=np.mean(e_train), np.std(e_train)
-m_etest,std_etest=np.mean(e_test), np.std(e_test)
-m_eval,std_eval=np.mean(e_val), np.std(e_val)
-rmse,mae=np.sqrt(mean_squared_error(y_val,pred_val)), mean_absolute_error(y_val,pred_val)
+# Define 3-fold cross-validation
+kf = KFold(n_splits=3, shuffle=True, random_state=42)
 
-# Validation plot
-figure = pyplot.figure(figsize = (10, 10))
-pyplot.gcf().subplots_adjust(wspace=0.4, hspace = 0.4)
-pyplot.figure(1)
-pyplot.subplot(1, 2, 1)
-pyplot.title('Training set')
-pyplot.xlabel('True')
-pyplot.ylabel('Predicted')
-pyplot.text(150, 1700, 'r={}'.format(round(r_train,2)),color='red')
-pyplot.scatter(y_train,pred_true)
-pyplot.subplot(2, 2, 2)
-pyplot.title('Testing set')
-pyplot.xlabel('True')
-pyplot.ylabel('Predicted')
-pyplot.scatter(y_test,pred_test)
-pyplot.text(180, 1500, 'r={}'.format(round(r_test,2)),color='red')
-pyplot.subplot(2, 2, 4)
-pyplot.title('Validation set')
-pyplot.xlabel('True')
-pyplot.ylabel('Predicted')
-pyplot.scatter(y_val,pred_val)
-pyplot.text(250, 1500, 'r={}'.format(round(r_val,2)),color='red')
-figure = pyplot.figure(figsize = (10, 10))
-pyplot.gcf().subplots_adjust(wspace=0.4, hspace = 0.4)
-pyplot.subplot(1, 2, 1)
-pyplot.title('Training set error')
-pyplot.hist(e_train,color = 'yellow',edgecolor = 'red')
-pyplot.subplot(2, 2, 2)
-pyplot.title('Testing set error')
-pyplot.hist(e_test,color = 'yellow',edgecolor = 'red')
-pyplot.text(180, 1500, 'r={}'.format(round(r_test,2)),color='red')
-pyplot.subplot(2, 2, 4)
-pyplot.title('Validation set error')
-pyplot.hist(e_val,color = 'yellow',edgecolor = 'red')
-pyplot.text(250, 1500, 'r={}'.format(round(r_val,2)),color='red')
+# Linear regression models
+model_rmse = LinearRegression()
+model_r = LinearRegression()
 
-# Grid prediction
-data2 = pd.read_excel('grid.xlsx')
-data2.head()
-d2=model.predict(data2)
-data2['G (RF)']=d2
-data2.to_excel('results.xlsx')
+# Predictions with cross-validation
+predicted_rmse = cross_val_predict(model_rmse, X, y_rmse, cv=kf)
+predicted_r = cross_val_predict(model_r, X, y_r, cv=kf)
+
+# Compute performance metrics
+rmse_score = mean_squared_error(y_rmse, predicted_rmse, squared=False)
+r2_score_value = r2_score(y_r, predicted_r)
+
+print(f"3-Fold Cross-Validation: RMSE = {rmse_score:.4f}, R² = {r2_score_value:.4f}")
+
+# Create subplots for validation
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+# Histogram of errors
+errors = y_rmse - predicted_rmse
+axes[0].hist(errors, bins=20, edgecolor='black', alpha=0.7)
+axes[0].set_title("Error Histogram")
+axes[0].set_xlabel("Error (Actual - Predicted Value)")
+axes[0].set_ylabel("Frequency")
+
+# Scatter plot of actual vs predicted values
+axes[1].scatter(y_r, predicted_r, alpha=0.6, edgecolors='k')
+axes[1].plot([min(y_r), max(y_r)], [min(y_r), max(y_r)], '--r', lw=2)
+axes[1].set_title("Correlation between Actual and Predicted Values")
+axes[1].set_xlabel("Actual Values")
+axes[1].set_ylabel("Predicted Values")
+
+plt.tight_layout()
+plt.show()
+
+# Genetic Algorithm Implementation
+creator.create("FitnessMax", base.Fitness, weights=(1.0, -1.0))  # Maximize R, minimize RMSE
+creator.create("Individual", list, fitness=creator.FitnessMax)
+
+toolbox = base.Toolbox()
+
+# Get variable bounds
+min_vals = X.min()
+max_vals = X.max()
+
+def create_individual():
+    return [random.uniform(min_vals[i], max_vals[i]) for i in X.columns]
+
+toolbox.register("individual", tools.initIterate, creator.Individual, create_individual)
+toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+
+def evaluate(individual):
+    X_test = np.array([individual])
+    predicted_rmse = model_rmse.predict(X_test)[0]
+    predicted_r = model_r.predict(X_test)[0]
+    return predicted_r, -predicted_rmse
+
+toolbox.register("evaluate", evaluate)
+toolbox.register("mate", tools.cxBlend, alpha=0.5)
+toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=1, indpb=0.2)
+toolbox.register("select", tools.selTournament, tournsize=3)
+
+population = toolbox.population(n=100)
+NGEN = 50
+for gen_num in range(NGEN):
+    population, _ = algorithms.eaSimple(population, toolbox, cxpb=0.5, mutpb=0.2, ngen=1, verbose=False)
+
+best_individual = tools.selBest(population, 1)[0]
+print("Best individual:", best_individual)
+
